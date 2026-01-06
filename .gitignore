@@ -1,0 +1,11 @@
+dags/__pycache__
+data/output.sgy
+data/input.sgy
+data/in.sgy
+data/mem.json
+logs
+airflow.cfg
+airflow.db
+simple_auth_manager_passwords.json.generated
+data/tmp
+airflow.*
