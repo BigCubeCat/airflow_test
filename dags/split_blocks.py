@@ -1,5 +1,5 @@
 import json
-from datetime import datetime
+import struct
 from pathlib import Path
 
 import segyio
@@ -14,6 +14,18 @@ print("DATA_DIR:", DATA_DIR)
 INPUT_FILE = DATA_DIR / "in.sgy"
 OUTPUT_FILE = DATA_DIR / "tmp/block"
 MEM_FILE = DATA_DIR / "mem.json"
+
+
+def write_float32_array(path: str, data: list[float]) -> None:
+    import struct
+
+    with open(path, "wb") as f:
+        f.write(struct.pack(f"{len(data)}f", *data))
+
+
+def write_int64_array(path: str, data: list[int]) -> None:
+    with open(path, "wb") as f:
+        f.write(struct.pack(f"{len(data)}q", *data))
 
 
 def read_offsets(segy_file: Path) -> list[int]:
@@ -71,20 +83,45 @@ def tkm2d_dag():
 
         return str(MEM_FILE)
 
+    @task
+    def create_blocks(mem_path: str):
+        with open(mem_path, "r") as f:
+            mem = json.load(f)
+
+        block_ids = set(blockno for _, blockno in mem)
+        count_blocks = len(block_ids)
+
+        trace_files = [f"{OUTPUT_FILE}_{i}.bin" for i in range(count_blocks)]
+        offset_files = [f"{OUTPUT_FILE}_{i}_offset.bin" for i in range(count_blocks)]
+        ensemble_files = [
+            f"{OUTPUT_FILE}_{i}_ensemble.bin" for i in range(count_blocks)
+        ]
+
+        traces = [[] for _ in range(count_blocks)]
+        offsets = [[] for _ in range(count_blocks)]
+        ensembles = [[] for _ in range(count_blocks)]
+
+        with segyio.open(INPUT_FILE, "r", ignore_geometry=True) as fin:
+            for in_idx, blockno in mem:
+                traces[blockno].extend(fin.trace[in_idx])
+
+                hdr = fin.header[in_idx]
+                offsets[blockno].append(float(hdr[segyio.TraceField.offset]))
+                ensembles[blockno].append(int(hdr[segyio.TraceField.CDP]))
+
+        for f_tr, f_off, f_en, tr, off, en in zip(
+            trace_files, offset_files, ensemble_files, traces, offsets, ensembles
+        ):
+            write_float32_array(f_tr, tr)
+            write_float32_array(f_off, off)
+            write_int64_array(f_en, en)
+
     data = read_file_offsets()
 
     processed = [process_block(data, i) for i in range(N)]
 
     mem_path = collect_results(processed)
-
-    write_segy = BashOperator(
-        task_id="write_segy_external",
-        bash_command=(
-            f"python3 {DATA_DIR}/write_bin_blocks.py {INPUT_FILE} {OUTPUT_FILE} {mem_path}"
-        ),
-    )
-
-    mem_path >> write_segy
+    result = create_blocks(mem_path)
 
 
 tkm2d = tkm2d_dag()
