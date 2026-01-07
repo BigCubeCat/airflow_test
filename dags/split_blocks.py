@@ -137,6 +137,7 @@ def tkm2d_dag():
     print(commands)
     run_tkm2d = BashOperator.partial(
         task_id="run_tkm2d",
+        pool="tkm2d_pool",
     ).expand(bash_command=commands)
 
 

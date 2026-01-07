@@ -27,4 +27,4 @@ def main(in_path, out_path, offset_limit):
 if __name__ == "__main__":
     import sys
 
-    main(sys.argv[1], sys.argv[2], 200)
+    main(sys.argv[1], sys.argv[2], 400)
