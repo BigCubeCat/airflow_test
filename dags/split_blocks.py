@@ -41,13 +41,13 @@ def read_offsets(segy_file: Path) -> list[int]:
 
 
 @dag(
-    dag_id="tkm2d",
+    dag_id="split_blocks",
     description="Миграция",
     schedule=None,
     catchup=False,
     tags=["tkm2d", "seismic", "migration"],
 )
-def tkm2d_dag():
+def split_blocks():
     @task
     def read_file_offsets():
         offsets = read_offsets(INPUT_FILE)
@@ -130,6 +130,16 @@ def tkm2d_dag():
 
         return params
 
+    @task
+    def gather_result(mem_path: str):
+        with open(mem_path, "r") as f:
+            mem = json.load(f)
+        block_ids = sorted({blockno for _, blockno in mem})
+        with open(f"{TMP_DIR}/result.txt", "w") as f:
+            for b in block_ids:
+                with open(f"{TMP_DIR}/output_{b}.txt", "r") as g:
+                    f.write(g.read())
+
     data = read_file_offsets()
     processed = [process_block(data, i) for i in range(N)]
     mem_path = collect_results(processed)
@@ -140,5 +150,8 @@ def tkm2d_dag():
         pool="tkm2d_pool",
     ).expand(bash_command=commands)
 
+    run_gather = gather_result(mem_path)
+    run_tkm2d >> run_gather
 
-tkm2d = tkm2d_dag()
+
+split_blocks = split_blocks()
