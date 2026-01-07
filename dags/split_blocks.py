@@ -8,12 +8,19 @@ from airflow.operators.bash import BashOperator
 
 N = 4
 DATA_DIR = Path.home() / "airflow" / "airflow_home" / "data"
+TMP_DIR = DATA_DIR / "tmp"
 print("DATA_DIR:", DATA_DIR)
 
 # в этом файле только первые 4 блока
 INPUT_FILE = DATA_DIR / "in.sgy"
 OUTPUT_FILE = DATA_DIR / "tmp/block"
 MEM_FILE = DATA_DIR / "mem.json"
+
+VEL_FILE = DATA_DIR / "vel.bin"
+ETA_FILE = DATA_DIR / "eta.bin"
+IMAG_FILE = DATA_DIR / "imag64.bin"
+
+TKM2D_EXECUTABLE = Path.home() / "airflow" / "airflow_home" / "scripts" / "tkm2d_test"
 
 
 def write_float32_array(path: str, data: list[float]) -> None:
@@ -115,13 +122,22 @@ def tkm2d_dag():
             write_float32_array(f_tr, tr)
             write_float32_array(f_off, off)
             write_int64_array(f_en, en)
+        params = []
+        for i, (t, o, e) in enumerate(zip(trace_files, offset_files, ensemble_files)):
+            params.append(
+                f"{TKM2D_EXECUTABLE} {t} {o} {e} {VEL_FILE} {ETA_FILE} {IMAG_FILE} {TMP_DIR}/output_{i}.txt"
+            )
+
+        return params
 
     data = read_file_offsets()
-
     processed = [process_block(data, i) for i in range(N)]
-
     mem_path = collect_results(processed)
-    result = create_blocks(mem_path)
+    commands = create_blocks(mem_path)
+    print(commands)
+    run_tkm2d = BashOperator.partial(
+        task_id="run_tkm2d",
+    ).expand(bash_command=commands)
 
 
 tkm2d = tkm2d_dag()
