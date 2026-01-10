@@ -11,8 +11,8 @@ from airflow.operators.bash import BashOperator
 DATA_DIR = Path.home() / "airflow" / "airflow_home" / "data"
 TMP_DIR = DATA_DIR / "tmp"
 
-INPUT_FILE = DATA_DIR / "in.sgy"
-MEM_FILE = DATA_DIR / "mem.json"
+INPUT_FILE = DATA_DIR / "input.sgy"
+MEM_FILE = TMP_DIR / "mem.json"
 
 OUTPUT_FILE = DATA_DIR / "tmp" / "block"
 
