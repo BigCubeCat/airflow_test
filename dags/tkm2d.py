@@ -1,7 +1,10 @@
 import json
+import os
 import struct
 from pathlib import Path
+from typing import Optional
 
+import numpy as np
 import segyio
 from airflow.decorators import dag, task
 from airflow.operators.bash import BashOperator
@@ -11,7 +14,7 @@ from airflow.operators.bash import BashOperator
 DATA_DIR = Path.home() / "airflow" / "airflow_home" / "data"
 TMP_DIR = DATA_DIR / "tmp"
 
-INPUT_FILE = DATA_DIR / "input.sgy"
+INPUT_FILE = DATA_DIR / "in.sgy"
 MEM_FILE = TMP_DIR / "mem.json"
 
 OUTPUT_FILE = DATA_DIR / "tmp" / "block"
@@ -116,15 +119,88 @@ def tkm2d_dag():
 
     @task
     def gather_result(mem_path: str):
+        """
+        Собирает данные из блоков в SEG-Y файл.
+        Записывает в TR_OFFSET - номер блока, в TR_ENSEMBLE - номер трассы в блоке.
+        """
+        # Читаем информацию о блоках из JSON
         with open(mem_path, "r") as f:
             mem = json.load(f)
-        block_ids = sorted({blockno for _, blockno in mem})
-        with open(f"{TMP_DIR}/result.txt", "w") as f:
-            for b in block_ids:
-                with open(f"{TMP_DIR}/output_{b}.txt", "r") as g:
-                    f.write(g.read())
 
-    # === Граф ===
+        # Получаем отсортированный список уникальных номеров блоков
+        block_ids = sorted({blockno for _, blockno in mem})
+
+        # Константы
+        SAMPLES_PER_TRACE = 2500
+        SAMPLE_INTERVAL = 1000  # микросекунды
+        FORMAT_CODE = 5  # IEEE float32
+
+        # Определяем общее количество трасс и собираем все данные
+        all_traces = []
+        all_headers = []
+
+        for block_id in block_ids:
+            # Читаем данные блока как float32 массив
+            data = np.fromfile(f"{TMP_DIR}/output_{block_id}.txt", dtype=np.float32)
+
+            # Проверяем целостность данных
+            if len(data) % SAMPLES_PER_TRACE != 0:
+                raise ValueError(
+                    f"Неверный размер данных в блоке {block_id}: "
+                    f"{len(data)} не кратно {SAMPLES_PER_TRACE}"
+                )
+
+            num_traces_in_block = len(data) // SAMPLES_PER_TRACE
+            traces_data = data.reshape(num_traces_in_block, SAMPLES_PER_TRACE)
+
+            # Создаем заголовки для каждой трассы в блоке
+            for local_trace_idx in range(num_traces_in_block):
+                header = {
+                    segyio.TraceField.offset: int(block_id),  # TR_OFFSET = номер блока
+                    segyio.TraceField.CDP: int(
+                        local_trace_idx
+                    ),  # TR_ENSEMBLE = номер трассы в блоке
+                    segyio.TraceField.TRACE_SAMPLE_COUNT: SAMPLES_PER_TRACE,
+                    segyio.TraceField.TRACE_SAMPLE_INTERVAL: SAMPLE_INTERVAL,
+                    segyio.TraceField.TRACE_SEQUENCE_FILE: len(all_traces) + 1,
+                }
+
+                all_traces.append(traces_data[local_trace_idx])
+                all_headers.append(header)
+
+        # Создаем SEG-Y файл
+        output_path = f"{TMP_DIR}/result.sgy"
+
+        spec = segyio.spec()
+        spec.samples = list(range(SAMPLES_PER_TRACE))
+        spec.format = FORMAT_CODE
+        spec.tracecount = len(all_traces)
+
+        with segyio.create(output_path, spec) as segyfile:
+            # Устанавливаем поля бинарного заголовка
+            segyfile.bin[segyio.BinField.Samples] = SAMPLES_PER_TRACE
+            segyfile.bin[segyio.BinField.Interval] = SAMPLE_INTERVAL
+            segyfile.bin[segyio.BinField.Format] = FORMAT_CODE
+            segyfile.bin[segyio.BinField.Traces] = len(all_traces)
+
+            # Записываем трассы и заголовки
+            for i in range(len(all_traces)):
+                segyfile.trace[i] = all_traces[i]
+                segyfile.header[i] = all_headers[i]
+
+            # Текстовый заголовок
+            text = (
+                "SEG-Y файл создан Apache Airflow. "
+                + f"Трасс: {len(all_traces)}, "
+                + f"Отсчетов на трассу: {SAMPLES_PER_TRACE}"
+            )
+            segyfile.text[0] = text.ljust(3200)[:3200]
+
+        print(f"SEG-Y файл успешно создан: {output_path}")
+        print(f"Всего трасс: {len(all_traces)}")
+        print(f"Обработано блоков: {len(block_ids)}")
+
+        return output_path
 
     mem_path = build_mem()
     commands = create_blocks(mem_path)
